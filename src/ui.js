@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 // 화면 조작(카메라 회전/줌), 관절 버튼, 저장된 동작 시퀀스를 연결합니다.
-export function setupUI({ scene, camera, cameraTarget, renderer, robotControls, sequences }) {
+export function setupUI({ scene, camera, cameraTarget, renderer, robotControls, sequences, onSequenceChange = () => {} }) {
   let isDragging = false;
   let previousPointer = { x: 0, y: 0 };
   let cameraAzimuth = 0;
@@ -122,7 +122,7 @@ export function setupUI({ scene, camera, cameraTarget, renderer, robotControls, 
         setAngle(control, nextAngle);
         render();
       });
-      jointButtons.push(button);
+      jointButtons.push({ button, control });
       row.appendChild(button);
     }
 
@@ -148,6 +148,7 @@ export function setupUI({ scene, camera, cameraTarget, renderer, robotControls, 
   let animationFrame = null;
   let animationToken = 0;
   let resolveAnimation = null;
+  let visionRunning = false;
 
   function animatePose(targetPose, duration, token) {
     const startPose = Object.fromEntries(currentAngles);
@@ -186,15 +187,38 @@ export function setupUI({ scene, camera, cameraTarget, renderer, robotControls, 
     });
   }
 
+  function syncControlAvailability() {
+    for (const { button, control } of jointButtons) {
+      const disabled = activeSequence || (visionRunning && control.id.startsWith('neck'));
+      button.disabled = disabled;
+      button.style.opacity = disabled ? '0.55' : '1';
+      button.style.cursor = disabled ? 'default' : 'pointer';
+    }
+    for (const button of sequenceButtons) {
+      button.disabled = activeSequence;
+      button.style.opacity = activeSequence ? '0.55' : '1';
+      button.style.cursor = activeSequence ? 'default' : 'pointer';
+    }
+  }
+
   function setSequenceRunning(running) {
     activeSequence = running;
-    for (const button of [...jointButtons, ...sequenceButtons]) {
-      button.disabled = running;
-      button.style.opacity = running ? '0.55' : '1';
-      button.style.cursor = running ? 'default' : 'pointer';
-    }
+    onSequenceChange(running);
+    syncControlAvailability();
     stopButton.disabled = !running;
     stopButton.style.opacity = running ? '1' : '0.5';
+  }
+
+  function setVisionRunning(running) {
+    visionRunning = running;
+    syncControlAvailability();
+  }
+
+  function syncAngles(angles) {
+    for (const control of robotControls) {
+      if (angles[control.id] === undefined) continue;
+      setAngle(control, angles[control.id]);
+    }
   }
 
   async function playSequence(sequence) {
@@ -214,7 +238,7 @@ export function setupUI({ scene, camera, cameraTarget, renderer, robotControls, 
     setSequenceRunning(false);
   }
 
-  stopButton.addEventListener('click', () => {
+  function cancelSequence() {
     if (!activeSequence) return;
     animationToken += 1;
     if (animationFrame !== null) cancelAnimationFrame(animationFrame);
@@ -223,7 +247,9 @@ export function setupUI({ scene, camera, cameraTarget, renderer, robotControls, 
     resolveAnimation = null;
     resolve?.(false);
     setSequenceRunning(false);
-  });
+  }
+
+  stopButton.addEventListener('click', cancelSequence);
 
   for (const sequence of sequences) {
     const button = document.createElement('button');
@@ -241,4 +267,10 @@ export function setupUI({ scene, camera, cameraTarget, renderer, robotControls, 
 
   panel.appendChild(stopButton);
   document.body.appendChild(panel);
+
+  function getAngle(id) {
+    return currentAngles.get(id) ?? 0;
+  }
+
+  return { syncAngles, setVisionRunning, getAngle };
 }
